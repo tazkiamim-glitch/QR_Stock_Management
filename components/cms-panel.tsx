@@ -1,7 +1,7 @@
 "use client"
 
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react"
-import { Plus, Pencil } from "lucide-react"
+import { Plus, Pencil, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -59,6 +59,26 @@ interface BookStockRecord {
   group?: string
   program: string
   availableStock: number
+}
+
+type UploadBatchStatus = "Pending" | "Processing" | "Completed" | "Failed"
+
+interface FailedRow {
+  user_id: string
+  academic_program_id: string
+  is_qr: string
+  error: string
+}
+
+interface UploadBatch {
+  id: string
+  createdBy: string
+  createdTime: Date
+  status: UploadBatchStatus
+  fileName: string
+  totalRows: number
+  successCount: number
+  failedRows: FailedRow[]
 }
 
 export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQuizDatabase }: CMSPanelProps) {
@@ -185,6 +205,81 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
   const [csvStatus, setCsvStatus] = useState<"idle" | "processing" | "success" | "error">("idle")
   const [csvFileName, setCsvFileName] = useState<string | null>(null)
 
+  // --- Upload History state ---
+  const [uploadHistory, setUploadHistory] = useState<UploadBatch[]>([
+    {
+      id: "BATCH-20260210-001",
+      createdBy: "operations@shikho.com",
+      createdTime: new Date("2026-02-10T11:45:00"),
+      status: "Completed",
+      fileName: "access-feb-10.csv",
+      totalRows: 53,
+      successCount: 50,
+      failedRows: [
+        { user_id: "user_id_abc", academic_program_id: "prog-9-sci", is_qr: "TRUE", error: "No Stock Available for Program" },
+        { user_id: "user_id_xyz", academic_program_id: "prog-10-sci", is_qr: "TRUE", error: "Invalid User ID" },
+        { user_id: "user_id_123", academic_program_id: "prog-9-sci", is_qr: "TRUE", error: "No Stock Available for Program" },
+      ],
+    },
+    {
+      id: "BATCH-20260208-003",
+      createdBy: "admin@shikho.com",
+      createdTime: new Date("2026-02-08T09:20:00"),
+      status: "Completed",
+      fileName: "bulk-access-feb-08.csv",
+      totalRows: 120,
+      successCount: 120,
+      failedRows: [],
+    },
+    {
+      id: "BATCH-20260205-002",
+      createdBy: "operations@shikho.com",
+      createdTime: new Date("2026-02-05T14:10:00"),
+      status: "Failed",
+      fileName: "access-feb-05.csv",
+      totalRows: 0,
+      successCount: 0,
+      failedRows: [],
+    },
+    {
+      id: "BATCH-20260201-004",
+      createdBy: "admin@shikho.com",
+      createdTime: new Date("2026-02-01T16:30:00"),
+      status: "Pending",
+      fileName: "access-feb-01.csv",
+      totalRows: 0,
+      successCount: 0,
+      failedRows: [],
+    },
+  ])
+
+  const batchCounterRef = useRef<number>(2)
+
+  const formatBatchTimestamp = (date: Date): string => {
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }) + " " + date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })
+  }
+
+  const handleDownloadFailureLog = (batch: UploadBatch) => {
+    const header = "user_id,academic_program_id,is_qr,error"
+    const rows = batch.failedRows.map(
+      (r) => `${r.user_id},${r.academic_program_id},${r.is_qr},"${r.error}"`,
+    )
+    const csvContent = [header, ...rows].join("\n")
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.setAttribute("download", `failure-log-${batch.id}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
   const handleAddNew = () => {
     setEditingQR(null)
     setIsFormOpen(true)
@@ -294,10 +389,50 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
 
     setCsvStatus("processing")
 
-    // Simulate backend processing
+    // Create a new Pending batch row immediately
+    const now = new Date()
+    batchCounterRef.current += 1
+    const batchId = `BATCH-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(batchCounterRef.current).padStart(3, "0")}`
+
+    const newBatch: UploadBatch = {
+      id: batchId,
+      createdBy: "operations@shikho.com",
+      createdTime: now,
+      status: "Pending",
+      fileName: file.name,
+      totalRows: 0,
+      successCount: 0,
+      failedRows: [],
+    }
+
+    setUploadHistory((prev) => [newBatch, ...prev])
+
+    // Simulate Pending -> Processing after 1s
     setTimeout(() => {
+      setUploadHistory((prev) =>
+        prev.map((b) => (b.id === batchId ? { ...b, status: "Processing" } : b)),
+      )
+    }, 1000)
+
+    // Simulate Processing -> Completed after 3s
+    setTimeout(() => {
+      const simulatedFailed: FailedRow[] = [
+        { user_id: "user_id_abc", academic_program_id: "prog-9-sci", is_qr: "TRUE", error: "No Stock Available for Program" },
+        { user_id: "user_id_xyz", academic_program_id: "prog-10-sci", is_qr: "TRUE", error: "Invalid User ID" },
+        { user_id: "user_id_123", academic_program_id: "prog-9-sci", is_qr: "TRUE", error: "No Stock Available for Program" },
+      ]
+      setUploadHistory((prev) =>
+        prev.map((b) =>
+          b.id === batchId
+            ? { ...b, status: "Completed", totalRows: 53, successCount: 50, failedRows: simulatedFailed }
+            : b,
+        ),
+      )
       setCsvStatus("success")
-    }, 2000)
+    }, 3000)
+
+    // Reset file input so the same file can be re-uploaded
+    if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
   const openFilePicker = () => {
@@ -797,8 +932,8 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
             </Card>
           </div>
         ) : (
-          <div className="space-y-4 max-w-3xl">
-            <Card>
+          <div className="space-y-6">
+            <Card className="max-w-3xl">
               <CardHeader>
                 <CardTitle>Bulk Manage QR Access via CSV</CardTitle>
               </CardHeader>
@@ -834,54 +969,111 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
                   onChange={handleCsvFileChange}
                 />
 
-                {csvStatus !== "idle" && (
-                  <div
-                    className={`mt-4 rounded-md border px-4 py-3 text-sm ${
-                      csvStatus === "error"
-                        ? "border-destructive/40 bg-destructive/10 text-destructive"
-                        : "border-green-500/40 bg-green-500/10 text-foreground"
-                    }`}
-                  >
-                    {csvStatus === "processing" && (
-                      <div>
-                        <p className="font-semibold">Processing...</p>
-                        {csvFileName && (
-                          <p className="mt-1">
-                            Simulating upload for file: <span className="font-mono">{csvFileName}</span>
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    {csvStatus === "success" && (
-                      <div>
-                        <h4 className="font-semibold mb-1">Upload Complete!</h4>
-                        <p>
-                          <strong>50</strong> users updated successfully.
-                        </p>
-                        <p className="mt-2">
-                          <strong>3</strong> users failed:
-                        </p>
-                        <ul className="list-disc pl-5 mt-1 space-y-0.5">
-                          <li>
-                            <code>user_id_abc</code>: No Stock Available for Program
-                          </li>
-                          <li>
-                            <code>user_id_xyz</code>: Invalid User ID
-                          </li>
-                          <li>
-                            <code>user_id_123</code>: No Stock Available for Program
-                          </li>
-                        </ul>
-                      </div>
-                    )}
-                    {csvStatus === "error" && (
-                      <div>
-                        <p className="font-semibold">Error</p>
-                        <p className="mt-1">Please upload a valid .csv file.</p>
-                      </div>
-                    )}
+                {csvStatus === "error" && (
+                  <div className="mt-4 rounded-md border px-4 py-3 text-sm border-destructive/40 bg-destructive/10 text-destructive">
+                    <p className="font-semibold">Error</p>
+                    <p className="mt-1">Please upload a valid .csv file.</p>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+
+            {/* Upload History */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Upload History</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-6">ID</TableHead>
+                      <TableHead>Created By</TableHead>
+                      <TableHead>Created Time</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="pr-6 text-center">Failure Log</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {uploadHistory.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                          No uploads yet. Upload a CSV file to get started.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      uploadHistory.map((batch) => {
+                        const hasFailures = batch.status === "Completed" && batch.failedRows.length > 0
+                        return (
+                          <TableRow key={batch.id}>
+                            <TableCell className="pl-6">
+                              <div className="font-mono text-xs font-medium">{batch.id}</div>
+                              <div className="text-xs text-muted-foreground mt-0.5">{batch.fileName}</div>
+                            </TableCell>
+                            <TableCell className="text-sm">{batch.createdBy}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                              {formatBatchTimestamp(batch.createdTime)}
+                            </TableCell>
+                            <TableCell>
+                              {batch.status === "Pending" && (
+                                <Badge className="bg-yellow-100 text-yellow-800 border border-yellow-300 hover:bg-yellow-100">
+                                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-yellow-500" />
+                                  Pending
+                                </Badge>
+                              )}
+                              {batch.status === "Processing" && (
+                                <Badge className="bg-blue-100 text-blue-800 border border-blue-300 hover:bg-blue-100">
+                                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                  Processing
+                                </Badge>
+                              )}
+                              {batch.status === "Completed" && (
+                                <Badge className="bg-green-100 text-green-800 border border-green-300 hover:bg-green-100">
+                                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                                  Completed
+                                </Badge>
+                              )}
+                              {batch.status === "Failed" && (
+                                <Badge className="bg-red-100 text-red-800 border border-red-300 hover:bg-red-100">
+                                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+                                  Failed
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="pr-6 text-center">
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      disabled={!hasFailures}
+                                      onClick={() => hasFailures && handleDownloadFailureLog(batch)}
+                                      className={
+                                        hasFailures
+                                          ? "text-destructive hover:text-destructive hover:bg-red-50"
+                                          : "text-muted-foreground/30 cursor-not-allowed"
+                                      }
+                                    >
+                                      <Download className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {hasFailures
+                                      ? `Download failure log (${batch.failedRows.length} failed row${batch.failedRows.length !== 1 ? "s" : ""})`
+                                      : batch.status === "Completed"
+                                        ? "No failures — nothing to download"
+                                        : "Available once processing completes"}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    )}
+                  </TableBody>
+                </Table>
               </CardContent>
             </Card>
           </div>
