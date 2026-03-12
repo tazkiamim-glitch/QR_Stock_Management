@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import QRFormSheet from "@/components/qr-form-sheet"
 import QRSuccessDialog from "@/components/qr-success-dialog"
@@ -76,6 +77,8 @@ interface UploadBatch {
   createdTime: Date
   status: UploadBatchStatus
   fileName: string
+  title?: string
+  description?: string
   totalRows: number
   successCount: number
   failedRows: FailedRow[]
@@ -201,9 +204,15 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
   }, [stockPage, totalStockPages])
 
   // --- Manage User Access via CSV state ---
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [csvStatus, setCsvStatus] = useState<"idle" | "processing" | "success" | "error">("idle")
   const [csvFileName, setCsvFileName] = useState<string | null>(null)
+
+  // --- Access upload form (Title, Description, CSV) ---
+  const [isAccessFormOpen, setIsAccessFormOpen] = useState(false)
+  const [accessFormTitle, setAccessFormTitle] = useState("")
+  const [accessFormDescription, setAccessFormDescription] = useState("")
+  const [accessFormFile, setAccessFormFile] = useState<File | null>(null)
+  const accessFormFileInputRef = useRef<HTMLInputElement | null>(null)
 
   // --- Upload History state ---
   const [uploadHistory, setUploadHistory] = useState<UploadBatch[]>([
@@ -374,22 +383,16 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
     URL.revokeObjectURL(url)
   }
 
-  const handleCsvFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    setCsvFileName(file.name)
-
+  const submitCsvBatch = (file: File, options?: { title?: string; description?: string }) => {
     const isCsv = file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv")
-
     if (!isCsv) {
       setCsvStatus("error")
-      return
+      return false
     }
 
+    setCsvFileName(file.name)
     setCsvStatus("processing")
 
-    // Create a new Pending batch row immediately
     const now = new Date()
     batchCounterRef.current += 1
     const batchId = `BATCH-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(batchCounterRef.current).padStart(3, "0")}`
@@ -400,6 +403,8 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
       createdTime: now,
       status: "Pending",
       fileName: file.name,
+      title: options?.title || undefined,
+      description: options?.description || undefined,
       totalRows: 0,
       successCount: 0,
       failedRows: [],
@@ -407,14 +412,12 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
 
     setUploadHistory((prev) => [newBatch, ...prev])
 
-    // Simulate Pending -> Processing after 1s
     setTimeout(() => {
       setUploadHistory((prev) =>
         prev.map((b) => (b.id === batchId ? { ...b, status: "Processing" } : b)),
       )
     }, 1000)
 
-    // Simulate Processing -> Completed after 3s
     setTimeout(() => {
       const simulatedFailed: FailedRow[] = [
         { user_id: "user_id_abc", academic_program_id: "prog-9-sci", is_qr: "TRUE", error: "No Stock Available for Program" },
@@ -431,12 +434,36 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
       setCsvStatus("success")
     }, 3000)
 
-    // Reset file input so the same file can be re-uploaded
-    if (fileInputRef.current) fileInputRef.current.value = ""
+    return true
   }
 
-  const openFilePicker = () => {
-    fileInputRef.current?.click()
+  const openAccessForm = () => {
+    setAccessFormTitle("")
+    setAccessFormDescription("")
+    setAccessFormFile(null)
+    if (accessFormFileInputRef.current) accessFormFileInputRef.current.value = ""
+    setIsAccessFormOpen(true)
+  }
+
+  const handleAccessFormFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    setAccessFormFile(file || null)
+  }
+
+  const handleAccessFormSubmit = () => {
+    if (!accessFormTitle.trim()) return
+    if (!accessFormFile) return
+    const ok = submitCsvBatch(accessFormFile, {
+      title: accessFormTitle.trim(),
+      description: accessFormDescription.trim() || undefined,
+    })
+    if (ok) {
+      setAccessFormTitle("")
+      setAccessFormDescription("")
+      setAccessFormFile(null)
+      if (accessFormFileInputRef.current) accessFormFileInputRef.current.value = ""
+      setIsAccessFormOpen(false)
+    }
   }
 
 
@@ -950,24 +977,13 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
 
                 <div
                   className="mt-2 border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted transition-colors"
-                  onClick={openFilePicker}
+                  onClick={openAccessForm}
                 >
                   <div className="text-3xl mb-2">☁️⬆️</div>
                   <p className="font-medium text-sm">
-                    Click here to browse or drag &amp; drop a .csv file
+                    Click here to add a new upload (title, description, and CSV)
                   </p>
-                  {csvFileName && (
-                    <p className="mt-1 text-xs text-muted-foreground">Selected file: {csvFileName}</p>
-                  )}
                 </div>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  onChange={handleCsvFileChange}
-                />
 
                 {csvStatus === "error" && (
                   <div className="mt-4 rounded-md border px-4 py-3 text-sm border-destructive/40 bg-destructive/10 text-destructive">
@@ -1008,7 +1024,7 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
                           <TableRow key={batch.id}>
                             <TableCell className="pl-6">
                               <div className="font-mono text-xs font-medium">{batch.id}</div>
-                              <div className="text-xs text-muted-foreground mt-0.5">{batch.fileName}</div>
+                              <div className="text-xs text-muted-foreground mt-0.5">{batch.title ?? batch.fileName}</div>
                             </TableCell>
                             <TableCell className="text-sm">{batch.createdBy}</TableCell>
                             <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
@@ -1202,6 +1218,72 @@ export default function CMSPanel({ qrDatabase, setQrDatabase, quizDatabase, setQ
             </Button>
             <Button className="bg-purple-600 hover:bg-purple-700" onClick={handleStockSubmit}>
               Submit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Access upload form: Title, Description, CSV */}
+      <Dialog open={isAccessFormOpen} onOpenChange={setIsAccessFormOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New CSV Upload</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="access-form-title">
+                Title <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="access-form-title"
+                value={accessFormTitle}
+                onChange={(e) => setAccessFormTitle(e.target.value)}
+                placeholder="e.g. February batch – Class 9"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="access-form-description">Description</Label>
+              <Textarea
+                id="access-form-description"
+                value={accessFormDescription}
+                onChange={(e) => setAccessFormDescription(e.target.value)}
+                placeholder="Optional notes about this upload"
+                rows={3}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>CSV file <span className="text-destructive">*</span></Label>
+              <div
+                className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-muted/50 transition-colors"
+                onClick={() => accessFormFileInputRef.current?.click()}
+              >
+                <div className="text-2xl mb-1">☁️⬆️</div>
+                <p className="text-sm font-medium text-muted-foreground">
+                  Click to browse or drag &amp; drop a .csv file
+                </p>
+                {accessFormFile && (
+                  <p className="mt-2 text-xs font-medium text-foreground">Selected: {accessFormFile.name}</p>
+                )}
+              </div>
+              <input
+                ref={accessFormFileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={handleAccessFormFileChange}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAccessFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-purple-600 hover:bg-purple-700"
+              onClick={handleAccessFormSubmit}
+              disabled={!accessFormTitle.trim() || !accessFormFile}
+            >
+              Upload
             </Button>
           </DialogFooter>
         </DialogContent>
